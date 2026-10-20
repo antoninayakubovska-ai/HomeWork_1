@@ -1,7 +1,7 @@
 # HomeWork_1
 Сортування i структури даних
 
-Task1 (Варіант V5):
+Task1 (Варіант V5, A 2, B 100, C 30):
 
 ` ` `bash
 g++ -std=c++17 -O2 -Imy_code my_code/student.cpp my_code/main.cpp -o run_task1
