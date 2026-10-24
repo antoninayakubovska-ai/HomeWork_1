@@ -6,6 +6,9 @@
 #include <fstream>
 #include <cmath>
 #include <numeric>
+#include <random>
+#include <unordered_set>
+#include <malloc.h>
 
 using namespace std;
 using namespace std::chrono;
@@ -28,10 +31,10 @@ vector<Student> generateData(const vector<Student>& base_data, size_t target_siz
 //Функція для обчислення середнього та стандартного відхилення
 pair<double, double> calcStats(const vector<double>& times)
 {
-    double sum = accumulate(times.begin(), times.end(), 0.0);
-    double mean = sum / times.size();
-    double sq_sum = inner_product(times.begin(), times.end(), times.begin(), 0.0);
-    double stdev = sqrt(sq_sum / times.size() - mean * mean);
+    double mean = accumulate(times.begin(), times.end(), 0.0) / times.size();
+    double sq = 0;
+    for (double t : times) sq += (t - mean) * (t - mean);
+    double stdev = sqrt(sq / (times.size() - 1)); 
     return {mean, stdev};
 }
 
@@ -44,52 +47,71 @@ int main()
         return 1;
     }
 
-    // 10 точок для графіка
     vector<size_t> sizes = {100, 500, 1000, 5000, 10000, 20000, 40000, 60000, 80000, 100000};
-    int repetitions = 5;
+    int repetitions = 7;
+    const int K1 = 300, K2 = 20000, K3 = 300;
+
+    mt19937 rng(7);
 
     ofstream out("results.csv");
-    out << "N,Op1_Mean_us,Op1_Std_us,Op2_Mean_us,Op2_Std_us,Op3_Mean_us,Op3_Std_us,Memory_MB\n";
-
+    out << "N,G,Op1_Mean_us,Op1_Std_us,Op2_Mean_us,Op2_Std_us,Op3_Mean_us,Op3_Std_us,Memory_MB\n";
 
     for (size_t N : sizes)
     {
         cout << "Тестування для N = " << N << "\n";
         vector<Student> test_data = generateData(base_data, N);
 
-        vector<double> op1_times, op2_times, op3_times;
+        unordered_set<string> groups;
+        for (const auto& s : test_data) groups.insert(s.m_group);
+
+        uniform_int_distribution<size_t> pick(0, N - 1);
+        uniform_real_distribution<float> rnd(0.0f, 100.0f);
+        vector<size_t> idx(K2);
+        vector<float> rating(K2);
+        for (int i = 0; i < K2; ++i) { idx[i] = pick(rng); rating[i] = rnd(rng); }
+
+        vector<double> op1_times, op2_times, op3_times, mem_bytes;
+        size_t sink = 0;
 
         for (int r = 0; r < repetitions; ++r)
         {
-            DatabaseVariantC db;
-            db.init(test_data);
+            malloc_trim(0);
+            size_t before = mallinfo2().uordblks;
+            DatabaseVariantC* db = new DatabaseVariantC();
+            db->init(test_data);
+            size_t after = mallinfo2().uordblks;
+            mem_bytes.push_back((double)(after - before));
 
+            for (int i = 0; i < 20; ++i) { db->get_top_100(); db->get_best_groups(); }
+
+            //середній час одного виклику
             auto start = high_resolution_clock::now();
-            db.get_top_100();
+            for (int i = 0; i < K1; ++i) sink += db->get_top_100().size();
             auto end = high_resolution_clock::now();
-            op1_times.push_back(duration_cast<microseconds>(end - start).count());
+            op1_times.push_back(duration<double, micro>(end - start).count() / K1);
 
-            string test_email = test_data[N / 2].m_email;
+            //оновлення випадкових студентів
             start = high_resolution_clock::now();
-            for (int k = 0; k < 1000; ++k) {
-                db.update_rating(test_email, 50.0f + (k % 50));
-            }
+            for (int i = 0; i < K2; ++i) sink += db->update_rating(test_data[idx[i]].m_email, rating[i]);
             end = high_resolution_clock::now();
-            op2_times.push_back(duration_cast<microseconds>(end - start).count() / 1000.0);
+            op2_times.push_back(duration<double, micro>(end - start).count() / K2);
 
+            //середній час одного виклику
             start = high_resolution_clock::now();
-            db.get_best_groups();
+            for (int i = 0; i < K3; ++i) sink += db->get_best_groups().size();
             end = high_resolution_clock::now();
-            op3_times.push_back(duration_cast<microseconds>(end - start).count());
+            op3_times.push_back(duration<double, micro>(end - start).count() / K3);
+
+            delete db;
         }
+        if (sink == 42) cerr << "";
 
         auto stats1 = calcStats(op1_times);
         auto stats2 = calcStats(op2_times);
         auto stats3 = calcStats(op3_times);
+        double memory_mb = calcStats(mem_bytes).first / (1024.0 * 1024.0);
 
-        double memory_mb = (N * 160.0) / (1024.0 * 1024.0);
-
-        out << N << ","
+        out << N << "," << groups.size() << ","
             << stats1.first << "," << stats1.second << ","
             << stats2.first << "," << stats2.second << ","
             << stats3.first << "," << stats3.second << ","
