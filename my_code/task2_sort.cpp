@@ -27,36 +27,34 @@ void saveStudentsToCSV(const string& filename, const vector<Student>& students)
     file.close();
 }
 
-void radixSortGroups(vector<Student>& arr)
+static inline uint32_t packKey(const std::string& g)
 {
-    int max_len = 6;
-    vector<Student> output(arr.size());
-
-    for (int pos = max_len - 1; pos >= 0; --pos)
-    {
-        int count[256] = {0};
-
-        for (const auto& s : arr) {
-            char c = (pos < s.m_group.size()) ? s.m_group[pos] : 0;
-            count[static_cast<unsigned char>(c)]++;
-        }
-
-        for (int i = 1; i < 256; ++i)
-        {
-            count[i] += count[i - 1];
-        }
-
-        for (int i = arr.size() - 1; i >= 0; --i)
-        {
-            char c = (pos < arr.size() && pos < arr[i].m_group.size()) ? arr[i].m_group[pos] : 0;
-            output[count[static_cast<unsigned char>(c)] - 1] = arr[i];
-            count[static_cast<unsigned char>(c)]--;
-        }
-
-        arr = output;
-    }
+    return (((uint32_t)(g[0]-'A')*26 + (g[1]-'A'))*26 + (g[2]-'A'))*100
+           + (g[4]-'0')*10 + (g[5]-'0');
 }
 
+void radixPacked(std::vector<Student>& arr)
+{
+    size_t n = arr.size();
+    std::vector<std::pair<uint32_t,uint32_t>> a(n), b(n);
+
+    for (size_t i = 0; i < n; i++)
+        a[i] = { packKey(arr[i].m_group), (uint32_t)i };
+
+    for (int shift = 0; shift < 24; shift += 8)
+    {
+        size_t cnt[257] = {0};
+        for (auto& p : a) cnt[((p.first >> shift) & 255) + 1]++;
+        for (int i = 0; i < 256; i++) cnt[i+1] += cnt[i];
+        for (auto& p : a) b[cnt[(p.first >> shift) & 255]++] = p;
+        a.swap(b);
+    }
+
+    std::vector<Student> out;
+    out.reserve(n);
+    for (auto& p : a) out.push_back(std::move(arr[p.second]));
+    arr.swap(out);
+}
 int main() {
     string filepath = "data/students.csv";
     vector<Student> original_students = loadStudentsFromCSV(filepath);
@@ -85,7 +83,7 @@ int main() {
     vector<Student> students_radix = original_students;
 
     auto start_radix = high_resolution_clock::now();
-    radixSortGroups(students_radix);
+    radixPacked(students_radix);
     auto end_radix = high_resolution_clock::now();
     auto time_radix = duration_cast<milliseconds>(end_radix - start_radix).count();
 
