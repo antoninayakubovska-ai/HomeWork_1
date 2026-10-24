@@ -1,59 +1,70 @@
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
+from scipy.optimize import nnls
 
-# 1. Зчитуємо дані з CSV
+# 1. Дані з експерименту
 try:
     df = pd.read_csv('results.csv')
 except FileNotFoundError:
-    print("Файл results.csv не знайдено! Перевірте, чи успішно завершився експеримент C++.")
+    print("Файл results.csv не знайдено! Спочатку запусти ./run_experiment")
     exit()
 
-N = df['N']
+n = df['N'].values.astype(float)
+G = df['G'].values.astype(float)          # кількість різних груп
 
-# 2. Налаштовуємо загальний вигляд полотна
-fig, axs = plt.subplots(2, 2, figsize=(15, 10))
-fig.suptitle('Аналіз продуктивності Варіанту C (Масштабування до 100k)', fontsize=16, fontweight='bold')
+# 2. Найповільніша операція - Op3 (перевіряємо за даними)
+slowest = max(['Op1', 'Op2', 'Op3'], key=lambda op: df[op + '_Mean_us'].iloc[-1])
+y = df[slowest + '_Mean_us'].values
+sd = df[slowest + '_Std_us'].values
+print("Найповільніша операція:", slowest)
 
-# Універсальна функція для малювання одного графіка з регресією
-def plot_with_regression(ax, x, y, yerr, title, ylabel, color):
-    # Малюємо експериментальні точки з вусами похибки
-    ax.errorbar(x, y, yerr=yerr, fmt='o', color=color, ecolor='gray', capsize=4, label='Експериментальні дані', markersize=5)
+# 3. Лінійна регресія T(n) = c1*f1(n) + c2*f2(n) + c3*f3(n)
+#    Op3 = один прохід по G групах -> f1 = G(n), f2 = n (зростання таблиць у пам'яті), f3 = 1
+#    nnls = найменші квадрати з умовою c >= 0 (час не може бути від'ємним)
+A = np.column_stack([G, n, np.ones_like(n)])
+c, _ = nnls(A, y)
+pred = A @ c
+r2 = 1 - ((y - pred) ** 2).sum() / ((y - y.mean()) ** 2).sum()
+print("c1 (G) = %.3e, c2 (n) = %.3e, c3 (1) = %.3e, R^2 = %.4f" % (c[0], c[1], c[2], r2))
 
-    # Розрахунок лінійної регресії (y = ax + b) поліномом 1-го степеня
-    coef = np.polyfit(x, y, 1)
-    poly1d_fn = np.poly1d(coef)
+# 4. Графіки
+fig, axs = plt.subplots(2, 2, figsize=(14, 9))
+fig.suptitle('Продуктивність варіанту C (N від 100 до 100 000)', fontsize=15, fontweight='bold')
 
-    # Малюємо лінію тренду
-    trend_label = f'Лінійна регресія:\nT(n) = {coef[0]:.2e} * n + {coef[1]:.2e}'
-    ax.plot(x, poly1d_fn(x), '--k', alpha=0.8, label=trend_label)
+# 4.1 Регресія для найповільнішої операції (з середнім і відхиленням)
+ax = axs[0, 0]
+ax.errorbar(n, y, yerr=sd, fmt='o', color='#2a6fdb', ecolor='gray', capsize=4,
+            label='Експеримент (середнє ± σ)')
+xs = np.linspace(n.min(), n.max(), 400)
+Gs = np.interp(xs, n, G)
+ax.plot(xs, c[0] * Gs + c[1] * xs + c[2], '--k',
+        label='T(n) = %.2e·G(n) + %.2e·n + %.2e\nR² = %.4f' % (c[0], c[1], c[2], r2))
+ax.set_title('Операція 3 (найповільніша): регресія')
+ax.set_xlabel('Кількість записів (N)'); ax.set_ylabel('Час, мкс')
+ax.legend(fontsize=9); ax.grid(True, linestyle='--', alpha=0.6)
 
-    # Оформлення
-    ax.set_title(title, fontsize=12)
-    ax.set_xlabel('Кількість записів (N)', fontsize=10)
-    ax.set_ylabel(ylabel, fontsize=10)
-    ax.legend(fontsize=9)
-    ax.grid(True, linestyle='--', alpha=0.6)
+# 4.2 Op1
+ax = axs[0, 1]
+ax.errorbar(n, df['Op1_Mean_us'], yerr=df['Op1_Std_us'], fmt='o-', color='#ff7f0e',
+            ecolor='gray', capsize=4)
+ax.set_title('Операція 1: Top-100'); ax.set_xlabel('Кількість записів (N)'); ax.set_ylabel('Час, мкс')
+ax.grid(True, linestyle='--', alpha=0.6)
 
-# 3. Будуємо 4 графіки
-# Графік 1: Операція 1 (Top-100)
-plot_with_regression(axs[0, 0], N, df['Op1_Mean_us'], df['Op1_Std_us'],
-                     'Операція 1: Отримання Top-100', 'Час виконання (мкс)', '#1f77b4')
+# 4.3 Op2
+ax = axs[1, 0]
+ax.errorbar(n, df['Op2_Mean_us'], yerr=df['Op2_Std_us'], fmt='o-', color='#2ca02c',
+            ecolor='gray', capsize=4)
+ax.set_title('Операція 2: оновлення рейтингу'); ax.set_xlabel('Кількість записів (N)'); ax.set_ylabel('Час, мкс')
+ax.grid(True, linestyle='--', alpha=0.6)
 
-# Графік 2: Операція 2 (Оновлення рейтингу)
-plot_with_regression(axs[0, 1], N, df['Op2_Mean_us'], df['Op2_Std_us'],
-                     'Операція 2: Оновлення рейтингу за email', 'Час виконання (мкс)', '#ff7f0e')
+# 4.4 Пам'ять (виміряна)
+ax = axs[1, 1]
+ax.plot(n, df['Memory_MB'], 'o-', color='#d62728')
+ax.set_title("Пам'ять (виміряна, mallinfo2)"); ax.set_xlabel('Кількість записів (N)'); ax.set_ylabel('МБ')
+ax.grid(True, linestyle='--', alpha=0.6)
 
-# Графік 3: Операція 3 (Найкраща група)
-plot_with_regression(axs[1, 0], N, df['Op3_Mean_us'], df['Op3_Std_us'],
-                     'Операція 3: Пошук найкращої групи', 'Час виконання (мкс)', '#2ca02c')
-
-# Графік 4: Використання пам'яті
-plot_with_regression(axs[1, 1], N, df['Memory_MB'], np.zeros(len(N)),
-                     'Використання пам\'яті контейнерами', 'Об\'єм (МБ)', '#d62728')
-
-# Зберігаємо результат
 plt.tight_layout()
-plt.subplots_adjust(top=0.92) # Трохи відступаємо зверху для головного заголовка
-plt.savefig('performance_graphs.png', dpi=300, bbox_inches='tight')
-print("Графіки успішно побудовано та збережено у файл 'performance_graphs.png'!")
+plt.subplots_adjust(top=0.92)
+plt.savefig('performance_graphs.png', dpi=200, bbox_inches='tight')
+print("Графіки збережено у performance_graphs.png")
